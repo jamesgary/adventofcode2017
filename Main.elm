@@ -1,159 +1,170 @@
 module Main exposing (main)
 
-import Array exposing (Array)
+import Array.Hamt as Array exposing (Array)
+import Ascii
+import Bitwise
 import Dict exposing (Dict)
+import Hex
 import Html exposing (Html, div, text)
+import Html.Attributes exposing (style)
 import Input exposing (input)
 import List.Extra
 import Regex
 
 
 testInput =
-    """b inc 5 if a > 1
-a inc 1 if b < 5
-c dec -10 if a >= 1
-c inc -20 if c == 10"""
+    """94,84,0,79,2,27,81,1,123,93,218,23,103,255,254,243"""
 
 
 main : Html msg
 main =
-    input
-        --testInput
-        |> String.split "\n"
-        |> List.map instFromStr
-        --|> Debug.log "INSTS"
-        |> List.foldl applyInst ( Dict.empty, 0 )
-        |> (\( register, max ) ->
-                ( register |> Dict.values |> List.maximum
-                , max
-                )
+    div []
+        [ div [ style [ ( "font-family", "monospace" ) ] ] [ text answerA ]
+        , div [ style [ ( "font-family", "monospace" ) ] ]
+            [ text (answerB ++ " should be a2582a3a0e66e6e86e3812dcb672a272")
+            ]
+        ]
+
+
+answerB : String
+answerB =
+    testInput
+        --""
+        |> String.trim
+        |> Ascii.fromString
+        |> (\lengths -> lengths ++ [ 17, 31, 73, 47, 23 ])
+        |> List.repeat 64
+        |> List.concat
+        |> List.foldl tie ( 0, 0, List.range 0 255 |> Array.fromList )
+        |> (\( _, _, hash ) -> hash)
+        |> Array.toList
+        |> (\l ->
+                let
+                    _ =
+                        Debug.log "list length" (List.length l)
+                in
+                l
            )
+        |> toSixteenChunks
+        |> List.map bitwiseNums
+        |> List.map toHexadecimal
+        |> String.concat
         |> toString
-        |> text
 
 
-type alias Inst =
-    { reg : String
-    , op : Op
-    , amt : Int
-    , compReg : String
-    , compOp : CompOp
-    , compVal : Int
-    }
+answerA : String
+answerA =
+    --"3,4,1,5"
+    testInput
+        |> String.split ","
+        |> List.map (\n -> String.toInt n |> resultSafetyDance)
+        |> List.foldl tie ( 0, 0, List.range 0 255 |> Array.fromList )
+        |> (\( _, _, hash ) -> hash)
+        |> Array.toList
+        |> toString
 
 
-type Op
-    = Inc
-    | Dec
+toHexadecimal : Int -> String
+toHexadecimal num =
+    Hex.toString num
+        |> (\h ->
+                if String.length h == 1 then
+                    "0" ++ h
+                else
+                    h
+           )
 
 
-type CompOp
-    = LT
-    | LTE
-    | EQ
-    | NEQ
-    | GT
-    | GTE
+bitwiseNums : List Int -> Int
+bitwiseNums nums =
+    nums
+        |> List.Extra.foldl1 Bitwise.xor
+        |> maybeSafetyDance
 
 
-applyInst : Inst -> ( Dict String Int, Int ) -> ( Dict String Int, Int )
-applyInst { reg, op, amt, compReg, compOp, compVal } ( registers, max ) =
+toSixteenChunks : List a -> List (List a)
+toSixteenChunks list =
+    List.range 0 15
+        |> List.map
+            (\n ->
+                list
+                    |> List.drop (n * 16)
+                    |> List.take 16
+            )
+
+
+tie : Int -> ( Int, Int, Array Int ) -> ( Int, Int, Array Int )
+tie length ( startPos, skipLength, list ) =
     let
-        curVal =
-            registers
-                |> Dict.get reg
-                |> Maybe.withDefault 0
-                |> Debug.log "curVal"
+        listLength =
+            Array.length list
 
-        curCompVal =
-            registers
-                |> Dict.get compReg
-                |> Maybe.withDefault 0
-                |> Debug.log "curCompVal"
+        endPos =
+            startPos + length
 
-        passesComp =
-            case compOp of
-                LT ->
-                    curCompVal < compVal
-
-                LTE ->
-                    curCompVal <= compVal
-
-                EQ ->
-                    curCompVal == compVal
-
-                NEQ ->
-                    curCompVal /= compVal
-
-                GT ->
-                    curCompVal > compVal
-
-                GTE ->
-                    curCompVal >= compVal
-
-        newVal =
-            if passesComp then
-                case op of
-                    Inc ->
-                        curVal + amt
-
-                    Dec ->
-                        curVal - amt
+        ( nextStartPos, newList ) =
+            if endPos < listLength then
+                ( endPos
+                , concat
+                    [ Array.slice 0 startPos list
+                    , reverse (Array.slice startPos endPos list)
+                    , Array.slice endPos listLength list
+                    ]
+                )
             else
-                curVal
+                let
+                    fixedEndPos =
+                        endPos - listLength
+
+                    reversedRange =
+                        concat
+                            [ Array.slice startPos listLength list
+                            , Array.slice 0 fixedEndPos list
+                            ]
+                            |> reverse
+
+                    _ =
+                        if Array.length reversedRange /= length then
+                            Debug.log "NO" ( startPos, length, endPos, fixedEndPos, Array.length reversedRange, listLength )
+                                |> always ""
+                        else
+                            Debug.log "OK" ( startPos, length, endPos, fixedEndPos, Array.length reversedRange, listLength )
+                                |> always ""
+                in
+                ( fixedEndPos
+                , concat
+                    [ Array.slice (length - fixedEndPos) length reversedRange
+                    , Array.slice fixedEndPos startPos list
+                    , Array.slice 0 (length - fixedEndPos) reversedRange
+                    ]
+                )
+
+        _ =
+            Debug.log "???" ( nextStartPos, skipLength, listLength )
     in
-    ( Dict.insert reg newVal registers, Basics.max newVal max )
+    ( if nextStartPos + skipLength <= listLength then
+        nextStartPos + skipLength
+      else
+        (nextStartPos + skipLength) % listLength
+    , skipLength + 1
+    , newList
+    )
 
 
-instFromStr : String -> Inst
-instFromStr str =
-    { reg =
-        str
-            |> regexSubSafetyDance "^(\\S+)"
-    , op =
-        str
-            |> regexSubSafetyDance "^\\S+ (\\S+)"
-            |> (\val ->
-                    if val == "inc" then
-                        Inc
-                    else
-                        Dec
-               )
-    , amt =
-        regexSubSafetyDance "^\\S+ \\S+ (\\S+)" str
-            |> String.toInt
-            |> resultSafetyDance
-    , compReg = regexSubSafetyDance "^\\S+ \\S+ \\S+ if (\\S+)" str
-    , compOp =
-        regexSubSafetyDance "^\\S+ \\S+ \\S+ if \\S+ (\\S+)" str
-            |> (\val ->
-                    case val of
-                        "<" ->
-                            LT
+concat : List (Array a) -> Array a
+concat list =
+    list
+        |> List.map Array.toList
+        |> List.concat
+        |> Array.fromList
 
-                        "<=" ->
-                            LTE
 
-                        "==" ->
-                            EQ
-
-                        "!=" ->
-                            NEQ
-
-                        ">" ->
-                            GT
-
-                        ">=" ->
-                            GTE
-
-                        _ ->
-                            Debug.crash ("Bad compOp: " ++ val)
-               )
-    , compVal =
-        regexSubSafetyDance "^\\S+ \\S+ \\S+ if \\S+ \\S+ (\\S+)" str
-            |> String.toInt
-            |> resultSafetyDance
-    }
+reverse : Array a -> Array a
+reverse array =
+    array
+        |> Array.toList
+        |> List.reverse
+        |> Array.fromList
 
 
 
