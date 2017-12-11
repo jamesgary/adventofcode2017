@@ -1,9 +1,11 @@
 module Main exposing (main)
 
+--import Dict exposing (Dict)
+
 import Array.Hamt as Array exposing (Array)
 import Ascii
 import Bitwise
-import Dict exposing (Dict)
+import EveryDict as EDict exposing (EveryDict)
 import Hex
 import Html exposing (Html, div, text)
 import Html.Attributes exposing (style)
@@ -12,143 +14,123 @@ import List.Extra
 import Regex
 
 
-testInput =
-    """94,84,0,79,2,27,81,1,123,93,218,23,103,255,254,243"""
+type alias Dirs =
+    EveryDict Dir Int
 
 
 main : Html msg
 main =
-    div []
-        [ div [ style [ ( "font-family", "monospace" ) ] ] [ text answerA ]
-        , div [ style [ ( "font-family", "monospace" ) ] ]
-            [ text (answerB ++ " should be a2582a3a0e66e6e86e3812dcb672a272")
-            ]
-        ]
+    [ """ne,ne,ne"""
+    , """ne,ne,sw,sw"""
+    , """ne,ne,s,s"""
+    , """se,sw,se,sw,sw"""
+    , input
+    ]
+        |> List.map solve
+        |> List.map
+            (\( dist, maxDist ) ->
+                "Distance: "
+                    ++ toString dist
+                    ++ ", Max Distance: "
+                    ++ toString maxDist
+            )
+        |> List.map (\s -> div [] [ text s ])
+        |> (\ds -> div [] ds)
 
 
-answerB : String
-answerB =
-    testInput
-        --""
+solve : String -> ( Int, Int )
+solve str =
+    str
         |> String.trim
-        |> Ascii.fromString
-        |> (\lengths -> lengths ++ [ 17, 31, 73, 47, 23 ])
-        |> List.repeat 64
-        |> List.concat
-        |> List.foldl tie ( 0, 0, List.range 0 255 |> Array.fromList )
-        |> (\( _, _, hash ) -> hash)
-        |> Array.toList
-        |> (\l ->
-                let
-                    _ =
-                        Debug.log "list length" (List.length l)
-                in
-                l
-           )
-        |> toSixteenChunks
-        |> List.map bitwiseNums
-        |> List.map toHexadecimal
-        |> String.concat
-        |> toString
-
-
-answerA : String
-answerA =
-    --"3,4,1,5"
-    testInput
         |> String.split ","
-        |> List.map (\n -> String.toInt n |> resultSafetyDance)
-        |> List.foldl tie ( 0, 0, List.range 0 255 |> Array.fromList )
-        |> (\( _, _, hash ) -> hash)
-        |> Array.toList
-        |> toString
-
-
-toHexadecimal : Int -> String
-toHexadecimal num =
-    Hex.toString num
-        |> (\h ->
-                if String.length h == 1 then
-                    "0" ++ h
-                else
-                    h
+        |> List.map toDir
+        |> List.foldl addDir ( initDir, 0 )
+        |> (\( dirs, maxDist ) ->
+                ( totalDist dirs, maxDist )
            )
 
 
-bitwiseNums : List Int -> Int
-bitwiseNums nums =
-    nums
-        |> List.Extra.foldl1 Bitwise.xor
+totalDist : Dirs -> Int
+totalDist dirs =
+    let
+        ups =
+            (2 * getDirCount N dirs)
+                + (getDirCount NE dirs + getDirCount NW dirs)
+
+        downs =
+            (2 * getDirCount S dirs)
+                + (getDirCount SE dirs + getDirCount SW dirs)
+
+        lefts =
+            getDirCount NW dirs + getDirCount SW dirs
+
+        rights =
+            getDirCount NE dirs + getDirCount SE dirs
+    in
+    (abs (ups - downs) + abs (lefts - rights)) // 2
+
+
+initDir : Dirs
+initDir =
+    List.foldl (\d -> EDict.insert d 0) EDict.empty allDirs
+
+
+addDir : Dir -> ( Dirs, Int ) -> ( Dirs, Int )
+addDir dir ( dirs, maxDist ) =
+    let
+        newDirs =
+            EDict.update dir (\mn -> Maybe.map (\n -> n + 1) mn) dirs
+    in
+    ( newDirs, max maxDist (totalDist newDirs) )
+
+
+getDirCount : Dir -> Dirs -> Int
+getDirCount dir dirs =
+    dirs
+        |> EDict.get dir
         |> maybeSafetyDance
 
 
-toSixteenChunks : List a -> List (List a)
-toSixteenChunks list =
-    List.range 0 15
-        |> List.map
-            (\n ->
-                list
-                    |> List.drop (n * 16)
-                    |> List.take 16
-            )
+type Dir
+    = NE
+    | SE
+    | S
+    | SW
+    | NW
+    | N
 
 
-tie : Int -> ( Int, Int, Array Int ) -> ( Int, Int, Array Int )
-tie length ( startPos, skipLength, list ) =
-    let
-        listLength =
-            Array.length list
+allDirs =
+    [ NE, SE, S, SW, NW, N ]
 
-        endPos =
-            startPos + length
 
-        ( nextStartPos, newList ) =
-            if endPos < listLength then
-                ( endPos
-                , concat
-                    [ Array.slice 0 startPos list
-                    , reverse (Array.slice startPos endPos list)
-                    , Array.slice endPos listLength list
-                    ]
-                )
-            else
-                let
-                    fixedEndPos =
-                        endPos - listLength
+toDir : String -> Dir
+toDir str =
+    case str of
+        "ne" ->
+            NE
 
-                    reversedRange =
-                        concat
-                            [ Array.slice startPos listLength list
-                            , Array.slice 0 fixedEndPos list
-                            ]
-                            |> reverse
+        "se" ->
+            SE
 
-                    _ =
-                        if Array.length reversedRange /= length then
-                            Debug.log "NO" ( startPos, length, endPos, fixedEndPos, Array.length reversedRange, listLength )
-                                |> always ""
-                        else
-                            Debug.log "OK" ( startPos, length, endPos, fixedEndPos, Array.length reversedRange, listLength )
-                                |> always ""
-                in
-                ( fixedEndPos
-                , concat
-                    [ Array.slice (length - fixedEndPos) length reversedRange
-                    , Array.slice fixedEndPos startPos list
-                    , Array.slice 0 (length - fixedEndPos) reversedRange
-                    ]
-                )
+        "s" ->
+            S
 
-        _ =
-            Debug.log "???" ( nextStartPos, skipLength, listLength )
-    in
-    ( if nextStartPos + skipLength <= listLength then
-        nextStartPos + skipLength
-      else
-        (nextStartPos + skipLength) % listLength
-    , skipLength + 1
-    , newList
-    )
+        "sw" ->
+            SW
+
+        "nw" ->
+            NW
+
+        "n" ->
+            N
+
+        _ ->
+            Debug.crash "bad dir!" str
+
+
+
+-- Helpers!
 
 
 concat : List (Array a) -> Array a
@@ -165,10 +147,6 @@ reverse array =
         |> Array.toList
         |> List.reverse
         |> Array.fromList
-
-
-
--- Helpers!
 
 
 getIndexFor : a -> List a -> Int
