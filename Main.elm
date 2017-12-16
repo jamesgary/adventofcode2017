@@ -1,7 +1,5 @@
 module Main exposing (main)
 
---import Dict exposing (Dict)
-
 import Array.Hamt as Array exposing (Array)
 import Ascii
 import Bitwise
@@ -20,248 +18,117 @@ import Set exposing (Set)
 main : Html msg
 main =
     div []
-        ([ --"flqrgnkx"
-           "ffayrhll"
-         ]
-            |> List.map solve
-            |> List.map format
-        )
+        --[ ( 65, 8921 )
+        [ ( 618, 814 )
+            |> solve
+            |> format
+        ]
 
 
-size =
-    128
-
-
-sizeMinusOne =
-    127
-
-
-format : ( List String, Int, Int ) -> Html msg
-format ( outputList, usedSquares, regions ) =
+format : Int -> Html msg
+format count =
     div
         [ style [ ( "font-family", "monospace" ) ] ]
-        (div [] [ text ("Used Squares: " ++ toString usedSquares) ]
-            :: div [] [ text ("Regions: " ++ toString regions) ]
-            :: div [] []
-            :: List.map (\s -> div [] [ text s ]) outputList
-        )
+        [ div [] [ text ("Judge count: " ++ toString count) ] ]
 
 
-solve : String -> ( List String, Int, Int )
-solve str =
-    List.range 0 sizeMinusOne
-        |> List.map
-            (\i ->
-                str
-                    ++ "-"
-                    ++ toString i
-                    |> KnotHash.hash
-                    |> String.toList
-                    |> List.map hexadecimalToBinary
-                    |> String.concat
+solve : ( Int, Int ) -> Int
+solve ( seedA, seedB ) =
+    List.range 0 (5000000 - 1)
+        |> List.foldl
+            (\i ( genA, genB, count ) ->
+                let
+                    newGenA =
+                        step genA
+
+                    newGenB =
+                        step genB
+
+                    newCount =
+                        if match newGenA.val newGenB.val then
+                            count + 1
+                        else
+                            count
+
+                    _ =
+                        if i % 10000 == 0 then
+                            Debug.log ("Iteration #" ++ toString (i // 10000) ++ " * 10000") newCount
+                        else
+                            0
+                in
+                ( newGenA, newGenB, newCount )
             )
-        |> (\outputList ->
-                ( outputList
-                , outputList
-                    |> List.map
-                        (\row ->
-                            row
-                                |> String.toList
-                                |> List.map
-                                    (String.fromChar >> String.toInt >> resultSafetyDance)
-                                |> List.sum
-                        )
-                    |> List.sum
-                , countRegions outputList
-                )
-           )
+            ( makeGenA seedA, makeGenB seedB, 0 )
+        |> (\( _, _, count ) -> count)
 
 
-countRegions : List String -> Int
-countRegions grid =
-    List.range 0 sizeMinusOne
-        |> List.map
-            (\x ->
-                List.range 0 sizeMinusOne
-                    |> List.map
-                        (\y ->
-                            ( ( x, y )
-                            , grid
-                                |> List.Extra.getAt y
-                                |> maybeSafetyDance
-                                |> String.split ""
-                                |> List.Extra.getAt x
-                                |> maybeSafetyDance
-                            )
-                        )
-            )
-        |> List.concat
-        |> Dict.fromList
-        |> countRegionsFromGrid
+type alias Gen =
+    { factor : Int
+    , val : Int
+    , multBy : Int
+    }
 
 
-countRegionsFromGrid : Dict ( Int, Int ) String -> Int
-countRegionsFromGrid grid =
-    countRegionsFromGridHelper grid Set.empty ( 0, 0 ) 0
+makeGenA : Int -> Gen
+makeGenA val =
+    { factor = 16807
+    , val = val
+    , multBy = 4
+    }
 
 
-countRegionsFromGridHelper :
-    Dict ( Int, Int ) String
-    -> Set ( Int, Int )
-    -> ( Int, Int )
-    -> Int
-    -> Int
-countRegionsFromGridHelper grid foundCoordinates ( x, y ) numRegions =
+makeGenB : Int -> Gen
+makeGenB val =
+    { factor = 48271
+    , val = val
+    , multBy = 8
+    }
+
+
+step : Gen -> Gen
+step ({ factor, val, multBy } as gen) =
     let
-        _ =
-            Debug.log "curPos" ( x, y )
+        newVal =
+            rem (factor * val) 2147483647
     in
-    if y == size then
-        numRegions
-    else if x == size then
-        countRegionsFromGridHelper grid foundCoordinates ( 0, y + 1 ) numRegions
-    else if Set.member ( x, y ) foundCoordinates then
-        countRegionsFromGridHelper grid foundCoordinates ( x + 1, y ) numRegions
+    if newVal % multBy == 0 then
+        { gen | val = newVal }
     else
-        let
-            newCoordinates =
-                getRegion grid ( x, y )
-        in
-        countRegionsFromGridHelper
-            grid
-            (Set.union newCoordinates foundCoordinates)
-            ( x + 1, y )
-            (if Set.isEmpty newCoordinates then
-                numRegions
-             else
-                numRegions + 1
-            )
+        step { gen | val = newVal }
 
 
-getRegion : Dict ( Int, Int ) String -> ( Int, Int ) -> Set ( Int, Int )
-getRegion grid curPos =
-    case Dict.get curPos grid of
-        Just "1" ->
-            getRegionHelper grid curPos Set.empty
-
-        _ ->
-            Set.empty
+match : Int -> Int -> Bool
+match numA numB =
+    getLast16Bits numA == getLast16Bits numB
 
 
-getRegionHelper : Dict ( Int, Int ) String -> ( Int, Int ) -> Set ( Int, Int ) -> Set ( Int, Int )
-getRegionHelper grid curPos regionCoordinates =
-    case Dict.get curPos grid |> maybeSafetyDance of
-        "0" ->
-            regionCoordinates
+getLast16Bits : Int -> List Int
+getLast16Bits num =
+    num
+        |> toBinary
+        |> (\b -> List.append b [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ])
+        |> List.take 16
 
-        "1" ->
-            if Set.member curPos regionCoordinates then
-                -- no need to keep going
-                regionCoordinates
-            else
-                curPos
-                    |> getNeighborCoords
-                    |> List.foldl
-                        (\coord rcs ->
-                            if Set.member coord rcs then
-                                rcs
-                            else
-                                getRegionHelper grid coord rcs
-                        )
-                        (Set.insert curPos regionCoordinates)
+
+toBinary : Int -> List Int
+toBinary num =
+    -- reversed binary list (lowest first)
+    case num of
+        0 ->
+            [ 0 ]
+
+        1 ->
+            [ 1 ]
 
         _ ->
-            Debug.crash "Got neither 0 nor 1!"
+            let
+                remainder =
+                    rem num 2
 
-
-getNeighborCoords : ( Int, Int ) -> List ( Int, Int )
-getNeighborCoords ( x, y ) =
-    let
-        left =
-            if x > 0 then
-                Just ( x - 1, y )
-            else
-                Nothing
-
-        right =
-            if x < sizeMinusOne then
-                Just ( x + 1, y )
-            else
-                Nothing
-
-        top =
-            if y > 0 then
-                Just ( x, y - 1 )
-            else
-                Nothing
-
-        bottom =
-            if y < sizeMinusOne then
-                Just ( x, y + 1 )
-            else
-                Nothing
-    in
-    [ top
-    , bottom
-    , left
-    , right
-    ]
-        |> List.filterMap identity
-
-
-hexadecimalToBinary : Char -> String
-hexadecimalToBinary char =
-    case char of
-        '0' ->
-            "0000"
-
-        '1' ->
-            "0001"
-
-        '2' ->
-            "0010"
-
-        '3' ->
-            "0011"
-
-        '4' ->
-            "0100"
-
-        '5' ->
-            "0101"
-
-        '6' ->
-            "0110"
-
-        '7' ->
-            "0111"
-
-        '8' ->
-            "1000"
-
-        '9' ->
-            "1001"
-
-        'a' ->
-            "1010"
-
-        'b' ->
-            "1011"
-
-        'c' ->
-            "1100"
-
-        'd' ->
-            "1101"
-
-        'e' ->
-            "1110"
-
-        'f' ->
-            "1111"
-
-        _ ->
-            Debug.crash "Got an un-hexy char!"
+                half =
+                    num // 2
+            in
+            remainder :: toBinary half
 
 
 
